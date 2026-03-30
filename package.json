@@ -1,0 +1,78 @@
+{
+  "name": "ai-code-assistant",
+  "displayName": "AI Code Assistant Pro",
+  "description": "Analyse, sécurité, génération de code, Git integration — propulsé par Gemini AI",
+  "version": "2.0.0",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Linters", "Other", "Machine Learning"],
+  "activationEvents": [
+    "onLanguage:javascript", "onLanguage:typescript", "onLanguage:python",
+    "onLanguage:java", "onLanguage:cpp", "onLanguage:c",
+    "onLanguage:go", "onLanguage:rust", "onLanguage:php", "onLanguage:ruby"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "aiAssistant.analyzeFile",    "title": "AI: Analyser le fichier" },
+      { "command": "aiAssistant.analyzeSecurity", "title": "AI: Analyse de sécurité" },
+      { "command": "aiAssistant.analyzePerformance", "title": "AI: ⚡ Analyse performance" },
+      { "command": "aiAssistant.analyzeProject",  "title": "AI: Analyser tout le projet" },
+      { "command": "aiAssistant.analyzeGit",      "title": "AI: Analyser diff Git" },
+      { "command": "aiAssistant.generateDoc",     "title": "AI: Générer la documentation" },
+      { "command": "aiAssistant.generateCode",    "title": "AI: Générer du code" },
+      { "command": "aiAssistant.explainCode",     "title": "AI: Expliquer la sélection" },
+      { "command": "aiAssistant.refactorCode",    "title": "AI: Refactorer la sélection" },
+      { "command": "aiAssistant.setApiKey",       "title": "AI: Configurer la clé API Gemini" }
+    ],
+   "keybindings": [
+  { "command": "aiAssistant.analyzeFile",     "key": "ctrl+alt+a", "when": "editorTextFocus" },
+  { "command": "aiAssistant.analyzeSecurity",  "key": "ctrl+alt+s", "when": "editorTextFocus" },
+  { "command": "aiAssistant.analyzePerformance", "key": "ctrl+alt+f", "when": "editorTextFocus" },
+  { "command": "aiAssistant.analyzeProject",   "key": "ctrl+alt+p", "when": "editorTextFocus" },
+  { "command": "aiAssistant.analyzeGit",       "key": "ctrl+alt+g", "when": "editorTextFocus" },
+  { "command": "aiAssistant.generateDoc",      "key": "ctrl+alt+d", "when": "editorTextFocus" },
+  { "command": "aiAssistant.generateCode",     "key": "ctrl+alt+n", "when": "editorTextFocus" },
+  { "command": "aiAssistant.explainCode",      "key": "ctrl+alt+e", "when": "editorHasSelection" },
+  { "command": "aiAssistant.refactorCode",     "key": "ctrl+alt+r", "when": "editorHasSelection" }
+],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "aiAssistant", "title": "AI Assistant Pro", "icon": "$(robot)" }
+      ]
+    },
+    "views": {
+      "aiAssistant": [
+        { "type": "webview", "id": "aiAssistant.sidebarView", "name": "AI Assistant Pro" }
+      ]
+    },
+    "configuration": {
+      "title": "AI Code Assistant Pro",
+      "properties": {
+        "aiAssistant.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Clé API Gemini (aistudio.google.com)"
+        },
+        "aiAssistant.autoAnalyze": {
+          "type": "boolean",
+          "default": true,
+          "description": "Analyser automatiquement à chaque sauvegarde"
+        },
+        "aiAssistant.autoComplete": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-complétion IA en temps réel (comme Copilot)"
+        },
+        "aiAssistant.language": {
+          "type": "string",
+          "default": "fr",
+          "enum": ["fr", "en"],
+          "description": "Langue des réponses"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0"
+  }
+}
