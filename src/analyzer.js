@@ -1,5 +1,20 @@
 const https = require('https');
 
+// ══════════════════════════════════════════════
+// CACHE GLOBAL — persiste toute la session VS Code
+// Clé = type + langage + hash du code
+// Même code = même résultat garanti
+// ══════════════════════════════════════════════
+const _cache = new Map();
+
+function _hash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = Math.imul(31, h) + str.charCodeAt(i) | 0;
+  }
+  return h.toString(36);
+}
+
 class AIAnalyzer {
   constructor(apiKey, language = 'fr') {
     this.apiKey = apiKey;
@@ -8,23 +23,39 @@ class AIAnalyzer {
   }
 
   async analyzeFile(code, language) {
+    const key = 'analyze|' + language + '|' + _hash(code);
+    if (_cache.has(key)) { console.log('[CACHE HIT] analyzeFile'); return _cache.get(key); }
     const prompt = 'Analyse ce code ' + language + ':\n\n```' + language + '\n' + code + '\n```';
-    return await this._callAPI(prompt);
+    const result = await this._callAPI(prompt);
+    _cache.set(key, result);
+    return result;
   }
 
   async analyzeSecurity(code, language) {
+    const key = 'security|' + language + '|' + _hash(code);
+    if (_cache.has(key)) { console.log('[CACHE HIT] analyzeSecurity'); return _cache.get(key); }
     const prompt = 'Analyse UNIQUEMENT les vulnérabilités de sécurité de ce code ' + language + ':\n\n```' + language + '\n' + code + '\n```';
-    return await this._callAPIWithSystemPrompt(prompt, 'security');
+    const result = await this._callAPIWithSystemPrompt(prompt, 'security');
+    _cache.set(key, result);
+    return result;
   }
 
   async analyzePerformance(code, language) {
+    const key = 'performance|' + language + '|' + _hash(code);
+    if (_cache.has(key)) { console.log('[CACHE HIT] analyzePerformance'); return _cache.get(key); }
     const prompt = 'Analyse UNIQUEMENT la performance et l\'optimisation de ce code ' + language + ':\n\n```' + language + '\n' + code + '\n```\n\nDétecte: boucles O(n²), requêtes en boucles (N+1), fuites mémoire, récursion sans limite, string concatenation en boucle, événements non supprimés, race conditions.';
-    return await this._callAPIWithSystemPrompt(prompt, 'performance');
+    const result = await this._callAPIWithSystemPrompt(prompt, 'performance');
+    _cache.set(key, result);
+    return result;
   }
 
   async analyzeDeadCode(code, language) {
+    const key = 'deadcode|' + language + '|' + _hash(code);
+    if (_cache.has(key)) { console.log('[CACHE HIT] analyzeDeadCode'); return _cache.get(key); }
     const prompt = 'Analyse ce code ' + language + ' et identifie UNIQUEMENT le code mort et inutilisé:\n\n```' + language + '\n' + code + '\n```';
-    return await this._callAPIWithSystemPrompt(prompt, 'deadcode');
+    const result = await this._callAPIWithSystemPrompt(prompt, 'deadcode');
+    _cache.set(key, result);
+    return result;
   }
 
   async generateDocumentation(code, language) {
@@ -39,9 +70,8 @@ class AIAnalyzer {
   }
 
   async analyzeProject(filesMap, mainLanguage) {
-    const filesContent = Object.entries(filesMap)
-      .slice(0, 8)
-      .map(function(entry) { return '### ' + entry[0] + '\n```' + mainLanguage + '\n' + entry[1].substring(0, 800) + '\n```'; })
+    const filesContent = Object.entries(filesMap).slice(0, 8)
+      .map(function(e) { return '### ' + e[0] + '\n```' + mainLanguage + '\n' + e[1].substring(0, 800) + '\n```'; })
       .join('\n\n');
     const prompt = 'Analyse l\'architecture de ce projet (' + Object.keys(filesMap).length + ' fichiers):\n\n' + filesContent;
     return await this._callAPIWithSystemPrompt(prompt, 'project');
@@ -79,17 +109,21 @@ class AIAnalyzer {
   }
 
   clearHistory() { this.conversationHistory = []; }
+  clearCache() {
+  _cache.clear();
+  console.log('[CACHE] Vidé');
+}
 
   async _callAPIWithSystemPrompt(userMessage, type) {
     const systemPrompts = {
-      security: this._getSecurityPrompt(),
-      deadcode: this._getDeadCodePrompt(),
-      doc: 'Tu es un expert documentation. Réponds en JSON:\n{"errors":[],"summary":"<desc>","score":100,"scoreDetails":{"breakdown":[]},"advice":[],"refactored":"<code avec doc>"}',
-      generate: 'Tu es un expert dev. Réponds en JSON:\n{"errors":[],"summary":"<explication>","score":100,"scoreDetails":{"breakdown":[]},"advice":[],"refactored":"<code généré>"}',
-      project: this._getProjectPrompt(),
-      git: this._getGitPrompt(),
+      security:    this._getSecurityPrompt(),
+      deadcode:    this._getDeadCodePrompt(),
       performance: this._getPerformancePrompt(),
-      completion: 'Tu es un assistant complétion. Réponds en JSON:\n{"errors":[],"summary":"","score":100,"scoreDetails":{"breakdown":[]},"advice":[],"refactored":"<code>"}'
+      project:     this._getProjectPrompt(),
+      git:         this._getGitPrompt(),
+      doc:         'Tu es un expert documentation. Réponds en JSON:\n{"errors":[],"summary":"<desc>","score":100,"scoreDetails":{"breakdown":[]},"advice":[],"refactored":"<code avec doc>"}',
+      generate:    'Tu es un expert dev. Réponds en JSON:\n{"errors":[],"summary":"<explication>","score":100,"scoreDetails":{"breakdown":[]},"advice":[],"refactored":"<code généré>"}',
+      completion:  'Tu es un assistant complétion. Réponds en JSON:\n{"errors":[],"summary":"","score":100,"scoreDetails":{"breakdown":[]},"advice":[],"refactored":"<code>"}'
     };
     const body = {
       system_instruction: { parts: [{ text: systemPrompts[type] || this._getDefaultSystemPrompt() }] },
@@ -113,8 +147,8 @@ class AIAnalyzer {
     return this._parseResponse(rawText);
   }
 
-  _getDefaultSystemPrompt() {
-    return 'Tu es un expert senior développeur logiciel (niveau Google/Microsoft/Amazon).\n' +
+_getDefaultSystemPrompt() {
+  return 'Tu es un expert senior développeur logiciel (niveau Google/Microsoft/Amazon).\n' +
     'Analyse le code selon les standards industriels reconnus mondialement.\n' +
     'Langages supportés: JavaScript, TypeScript, Python, Java, C, C++, Go, Rust, PHP, Ruby, HTML, CSS, SQL, JSON, YAML, Shell/Bash.\n\n' +
     '══════════════════════════════════════\n' +
@@ -122,133 +156,96 @@ class AIAnalyzer {
     '══════════════════════════════════════\n' +
     'Commence à 100, déduis les points selon ces critères:\n\n' +
     '【1. BUGS & CORRECTNESS】 max -40 pts\n' +
-    '  -10 pts : bug critique (NullPointer, ArrayIndexOutOfBounds, logique incorrecte)\n' +
-    '  -8 pts  : exception non gérée pouvant crasher\n' +
-    '  -7 pts  : variable non initialisée utilisée\n' +
+    '  -10 pts : bug critique\n' +
+    '  -8 pts  : exception non gérée\n' +
+    '  -7 pts  : variable non initialisée\n' +
     '  -10 pts : boucle/récursion infinie\n' +
     '  -5 pts  : condition toujours vraie/fausse\n\n' +
     '【2. SÉCURITÉ (OWASP Top 10)】 max -25 pts\n' +
-    '  -15 pts : SQL Injection (requête non paramétrée)\n' +
-    '  -10 pts : XSS (données user non échappées)\n' +
-    '  -15 pts : Credentials/secrets en dur dans le code\n' +
+    '  -15 pts : SQL Injection\n' +
+    '  -10 pts : XSS\n' +
+    '  -15 pts : Credentials en dur\n' +
     '  -10 pts : Données sensibles non chiffrées\n' +
-    '  -8 pts  : Entrées utilisateur non validées\n' +
-    '  -5 pts  : Path traversal possible\n\n' +
-    '【3. CLEAN CODE (Robert C. Martin)】 max -20 pts\n' +
-    '  -3 pts  : Noms non descriptifs (a, b, x, tmp, data, obj) — par occurrence (max -9)\n' +
-    '  -5 pts  : Fonction > 30 lignes (Single Responsibility)\n' +
-    '  -5 pts  : Classe > 200 lignes\n' +
-    '  -5 pts  : Code dupliqué (DRY violation)\n' +
-    '  -3 pts  : Magic numbers (utiliser des constantes nommées)\n' +
-    '  -3 pts  : Commentaires manquants sur méthodes publiques\n' +
-    '  -2 pts  : Else inutile après return (Early Return Pattern)\n\n' +
+    '  -8 pts  : Entrées non validées\n\n' +
+    '【3. CLEAN CODE】 max -20 pts\n' +
+    '  -3 pts  : Noms non descriptifs (max -9)\n' +
+    '  -5 pts  : Fonction > 30 lignes\n' +
+    '  -5 pts  : Code dupliqué\n' +
+    '  -3 pts  : Magic numbers\n' +
+    '  -3 pts  : Commentaires manquants\n\n' +
     '【4. ARCHITECTURE & SOLID】 max -15 pts\n' +
-    '  -5 pts  : Violation SRP (classe fait trop de choses)\n' +
-    '  -5 pts  : Couplage fort (dépendances directes entre classes)\n' +
-    '  -5 pts  : Absence totale de gestion d\'erreurs\n' +
-    '  -5 pts  : Complexité cyclomatique > 10\n' +
-    '  -3 pts  : God class ou God method\n\n' +
+    '  -5 pts  : Violation SRP\n' +
+    '  -5 pts  : Couplage fort\n' +
+    '  -5 pts  : Absence gestion erreurs\n' +
+    '  -5 pts  : Complexité cyclomatique > 10\n\n' +
     '【5. PERFORMANCE】 max -10 pts\n' +
-    '  -8 pts  : Requête DB dans une boucle (N+1 problem)\n' +
-    '  -3 pts  : String concatenation dans une boucle (utiliser StringBuilder/join)\n' +
-    '  -3 pts  : Création d\'objets inutiles dans une boucle\n' +
-    '  -5 pts  : Algorithme O(n²) ou pire évitable\n' +
-    '  -3 pts  : Chargement de données non nécessaires\n\n' +
+    '  -8 pts  : N+1 problem\n' +
+    '  -3 pts  : String concat en boucle\n' +
+    '  -5 pts  : Algorithme O(n²) évitable\n\n' +
     'RÈGLES ABSOLUES:\n' +
     '- Sans tests unitaires: score max = 85\n' +
-    '- Sans documentation des méthodes publiques: score max = 90\n' +
+    '- Sans documentation: score max = 90\n' +
     '- Avec secrets en dur: score max = 50\n' +
-    '- Sois STRICT. Ne surnotre pas. Un code sans défauts évidents mérite 88-92, pas 100.\n' +
-    '- DÉTERMINISME : Le score est UNIQUEMENT la somme arithmétique 100 - déductions. Ne jamais arrondir ni ajuster subjectivement. Calcule chaque déduction explicitement puis fais la soustraction. Le même code doit toujours donner le même score.\n\n' +
-    'Réponds UNIQUEMENT en JSON valide, aucun texte avant ou après:\n' +
+    '- DÉTERMINISME STRICT: score = exactement 100 - somme_des_déductions. Calcule chaque déduction explicitement. Pas d\'arrondi subjectif.\n' +
+    '- DÉDUPLICATION STRICTE: Maximum 1 diagnostic par numéro de ligne. Regroupe TOUS les problèmes d\'une même ligne en UN SEUL objet dans "errors". Un message concis qui résume tous les problèmes de cette ligne.\n\n' +
+    'Réponds UNIQUEMENT en JSON valide:\n' +
     '{\n' +
-    '  "errors": [\n' +
-    '    {\n' +
-    '      "line": <numéro ou null>,\n' +
-    '      "severity": "error|warning|info",\n' +
-    '      "message": "<problème précis>",\n' +
-    '      "fix": "<correction concrète>",\n' +
-    '      "explanation": "<pourquoi cest un problème>"\n' +
-    '    }\n' +
-    '  ],\n' +
-    '  "summary": "<résumé global en 2-3 phrases>",\n' +
-    '  "score": <note 0-100>,\n' +
-    '  "scoreDetails": {\n' +
-    '    "breakdown": [\n' +
-    '      { "critere": "Bugs & Correctness", "note": <pts/40>, "max": 40, "deduction": <pts perdus>, "detail": "<trouvé ou RAS>"},\n' +
-    '      { "critere": "Sécurité (OWASP)", "note": <pts/25>, "max": 25, "deduction": <pts perdus>, "detail": "<trouvé ou RAS>"},\n' +
-    '      { "critere": "Clean Code", "note": <pts/20>, "max": 20, "deduction": <pts perdus>, "detail": "<trouvé ou RAS>"},\n' +
-    '      { "critere": "Architecture & SOLID", "note": <pts/15>, "max": 15, "deduction": <pts perdus>, "detail": "<trouvé ou RAS>"},\n' +
-    '      { "critere": "Performance", "note": <pts/10>, "max": 10, "deduction": <pts perdus>, "detail": "<trouvé ou RAS>"}\n' +
-    '    ]\n' +
-    '  },\n' +
-    '  "advice": ["<conseil 1>", "<conseil 2>", "<conseil 3>"],\n' +
+    '  "errors": [{"line":<n ou null>,"severity":"error|warning|info","message":"<problème concis — 1 seul par ligne>","fix":"<UNE SEULE LIGNE de code Java/JS exact prêt à copier-coller, JAMAIS une description textuelle. Exemple: .orElseThrow(() -> new NoSuchElementException(\\"Entry not found: \\" + entryId))>","explanation":"<pourquoi en 1 phrase>"}],\n' +
+    '  "summary": "<résumé 2-3 phrases>",\n' +
+    '  "score": <0-100>,\n' +
+    '  "scoreDetails": {"breakdown": [\n' +
+    '    {"critere":"Bugs & Correctness","note":<pts/40>,"max":40,"deduction":<perdus>,"detail":"<trouvé ou RAS>"},\n' +
+    '    {"critere":"Sécurité (OWASP)","note":<pts/25>,"max":25,"deduction":<perdus>,"detail":"<trouvé ou RAS>"},\n' +
+    '    {"critere":"Clean Code","note":<pts/20>,"max":20,"deduction":<perdus>,"detail":"<trouvé ou RAS>"},\n' +
+    '    {"critere":"Architecture & SOLID","note":<pts/15>,"max":15,"deduction":<perdus>,"detail":"<trouvé ou RAS>"},\n' +
+    '    {"critere":"Performance","note":<pts/10>,"max":10,"deduction":<perdus>,"detail":"<trouvé ou RAS>"}\n' +
+    '  ]},\n' +
+    '  "advice": ["<conseil 1>","<conseil 2>","<conseil 3>"],\n' +
     '  "refactored": null\n' +
     '}';
-  }
+}
 
   _getSecurityPrompt() {
-    return 'Tu es un expert cybersécurité (OWASP, CVE). Analyse UNIQUEMENT les vulnérabilités.\n' +
-      'Réponds en JSON:\n{"errors":[{"line":<n>,"severity":"error|warning|info","message":"<vuln>","fix":"<fix>","explanation":"<explication>"}],' +
-      '"summary":"<résumé>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
+    return 'Tu es un expert cybersécurité (OWASP). Analyse UNIQUEMENT les vulnérabilités.\nRéponds en JSON:\n{"errors":[{"line":<n>,"severity":"error|warning|info","message":"<vuln>","fix":"<code exact de correction, une seule ligne>","explanation":"<explication>"}],"summary":"<résumé>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
   }
 
   _getDeadCodePrompt() {
-    return 'Tu es un expert analyse statique de code. Identifie UNIQUEMENT:\n' +
-      '- Variables déclarées mais jamais utilisées\n' +
-      '- Fonctions/méthodes définies mais jamais appelées\n' +
-      '- Imports/require jamais utilisés\n' +
-      '- Blocs de code inaccessibles (après return, throw, etc.)\n' +
-      '- Conditions toujours vraies ou toujours fausses\n' +
-      '- Paramètres de fonction jamais utilisés\n' +
-      '- Branches else/catch jamais atteintes\n\n' +
-      'Pour chaque élément trouvé, indique: nom, ligne, type (variable/fonction/import/bloc), et si on peut le supprimer en toute sécurité.\n\n' +
-      'Réponds en JSON:\n' +
-      '{"errors":[{"line":<n>,"severity":"warning|info","message":"<description>","fix":"Supprimer: <nom>","explanation":"<pourquoi cest du code mort>"}],' +
-      '"summary":"<résumé: X éléments morts trouvés>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
+    return 'Tu es un expert analyse statique. Identifie UNIQUEMENT le code mort (variables/fonctions/imports inutilisés, blocs inaccessibles).\nRéponds en JSON:\n{"errors":[{"line":<n>,"severity":"warning|info","message":"<desc>","fix":"// SUPPRIMER cette ligne: <nom>","explanation":"<pourquoi>"}],"summary":"<X éléments morts>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
   }
 
   _getProjectPrompt() {
-    return 'Tu es un architecte logiciel senior. Analyse l\'architecture selon les standards industriels.\n' +
-      'Réponds en JSON:\n{"errors":[{"line":null,"severity":"error|warning|info","message":"<problème>","fix":"<solution>","explanation":"<détail>"}],' +
-      '"summary":"<analyse>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
+    return 'Tu es un architecte logiciel senior. Analyse l\'architecture selon les standards industriels.\nRéponds en JSON:\n{"errors":[{"line":null,"severity":"error|warning|info","message":"<problème>","fix":"<solution>","explanation":"<détail>"}],"summary":"<analyse>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
   }
 
   _getGitPrompt() {
-    return 'Tu es un expert code review. Analyse ce diff selon les standards professionnels.\n' +
-      'Réponds en JSON:\n{"errors":[{"line":<n>,"severity":"error|warning|info","message":"<problème>","fix":"<correction>","explanation":"<explication>"}],' +
-      '"summary":"<résumé>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
+    return 'Tu es un expert code review. Analyse ce diff selon les standards professionnels.\nRéponds en JSON:\n{"errors":[{"line":<n>,"severity":"error|warning|info","message":"<problème>","fix":"<code exact optimisé, une seule ligne>","explanation":"<explication>"}],"summary":"<résumé>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
   }
 
-  _getPerformancePrompt() {
-    return 'Tu es un expert performance et optimisation algorithmique.\n' +
-      'Analyse ce code et retourne un JSON avec un breakdown COMPLET obligatoire.\n\n' +
-      'SCORING sur 100 — commence à 100, déduis:\n' +
-      '【Complexité algorithmique】 max -35 pts: O(n²) -20pts, O(n³) -25pts, récursion infinie -10pts, recherche linéaire en boucle -8pts\n' +
-      '【Requêtes DB/IO】 max -25 pts: N+1 problem -20pts, appel API en boucle -15pts, lecture fichier en boucle -10pts\n' +
-      '【Gestion mémoire】 max -20 pts: fuite mémoire (event non supprimé) -15pts, objets inutiles en boucle -10pts, cache sans limite -8pts\n' +
-      '【String & Collections】 max -15 pts: concaténation string en boucle -10pts, copie inutile -5pts\n' +
-      '【Concurrence & Async】 max -15 pts: race condition -15pts, callback hell -8pts, pas de timeout -5pts\n\n' +
-      'RÈGLE DÉTERMINISME: score = 100 - somme des déductions. Calcule chaque déduction explicitement.\n\n' +
-      'Réponds UNIQUEMENT en JSON valide:\n' +
-      '{\n' +
-      '  "errors": [{"line":<n ou null>,"severity":"error|warning|info","message":"<problème>","fix":"<optimisation>","explanation":"<impact perf>"}],\n' +
-      '  "summary": "<résumé 2-3 phrases>",\n' +
-      '  "score": <0-100>,\n' +
-      '  "scoreDetails": {\n' +
-      '    "breakdown": [\n' +
-      '      {"critere":"Complexité algorithmique","note":<pts/35>,"max":35,"deduction":<pts perdus>,"detail":"<trouvé ou RAS>"},\n' +
-      '      {"critere":"Requêtes DB/IO","note":<pts/25>,"max":25,"deduction":<pts perdus>,"detail":"<trouvé ou RAS>"},\n' +
-      '      {"critere":"Gestion mémoire","note":<pts/20>,"max":20,"deduction":<pts perdus>,"detail":"<trouvé ou RAS>"},\n' +
-      '      {"critere":"String & Collections","note":<pts/15>,"max":15,"deduction":<pts perdus>,"detail":"<trouvé ou RAS>"},\n' +
-      '      {"critere":"Concurrence & Async","note":<pts/15>,"max":15,"deduction":<pts perdus>,"detail":"<trouvé ou RAS>"}\n' +
-      '    ]\n' +
-      '  },\n' +
-      '  "advice": ["<conseil 1>","<conseil 2>","<conseil 3>"],\n' +
-      '  "refactored": null\n' +
-      '}';
-  }
-
+ _getPerformancePrompt() {
+  return 'Tu es un expert performance et optimisation algorithmique.\n' +
+    'SCORING sur 100 — DÉTERMINISME STRICT: score = exactement 100 - somme des déductions. Calcule chaque déduction explicitement avant de soustraire.\n\n' +
+    'Déduis:\n' +
+    '【Complexité algorithmique】 max -35 pts: O(n²) -20pts, O(n³) -25pts, récursion infinie -10pts, recherche linéaire en boucle -8pts\n' +
+    '【Requêtes DB/IO】 max -25 pts: N+1 problem -20pts, appel API en boucle -15pts, lecture fichier en boucle -10pts\n' +
+    '【Gestion mémoire】 max -20 pts: fuite mémoire -15pts, objets inutiles en boucle -10pts, cache sans limite -8pts\n' +
+    '【String & Collections】 max -15 pts: concat string en boucle -10pts, copie inutile -5pts\n' +
+    '【Concurrence & Async】 max -15 pts: race condition -15pts, callback hell -8pts, pas de timeout -5pts\n\n' +
+    'RÈGLES ABSOLUES:\n' +
+    '- DÉDUPLICATION STRICTE: Maximum 1 diagnostic par numéro de ligne. Regroupe TOUS les problèmes d\'une même ligne en UN SEUL objet dans "errors".\n' +
+    '- Le champ "fix" doit contenir du CODE EXACT prêt à copier-coller, JAMAIS une description textuelle.\n\n' +
+    'Réponds UNIQUEMENT en JSON valide:\n' +
+    '{"errors":[{"line":<n ou null>,"severity":"error|warning|info","message":"<problème concis — 1 seul par ligne>","fix":"<code exact optimisé, une seule ligne>","explanation":"<impact perf en 1 phrase>"}],' +
+    '"summary":"<résumé 2-3 phrases>",' +
+    '"score":<0-100>,' +
+    '"scoreDetails":{"breakdown":[' +
+    '{"critere":"Complexité algorithmique","note":<pts/35>,"max":35,"deduction":<perdus>,"detail":"<trouvé ou RAS>"},' +
+    '{"critere":"Requêtes DB/IO","note":<pts/25>,"max":25,"deduction":<perdus>,"detail":"<trouvé ou RAS>"},' +
+    '{"critere":"Gestion mémoire","note":<pts/20>,"max":20,"deduction":<perdus>,"detail":"<trouvé ou RAS>"},' +
+    '{"critere":"String & Collections","note":<pts/15>,"max":15,"deduction":<perdus>,"detail":"<trouvé ou RAS>"},' +
+    '{"critere":"Concurrence & Async","note":<pts/15>,"max":15,"deduction":<perdus>,"detail":"<trouvé ou RAS>"}]},' +
+    '"advice":["<conseil 1>","<conseil 2>","<conseil 3>"],' +
+    '"refactored":null}';
+}
   _httpRequest(body, retryCount) {
     retryCount = retryCount || 0;
     return new Promise(function(resolve, reject) {
@@ -270,18 +267,15 @@ class AIAnalyzer {
               const msg = parsed.error.message || '';
               const retryMatch = msg.match(/retry in ([\d.]+)s/i);
               if (retryMatch && retryCount < 2) {
-                const waitMs = Math.min(parseFloat(retryMatch[1]) * 1000, 65000);
                 setTimeout(function() {
                   this._httpRequest(body, retryCount + 1).then(resolve).catch(reject);
-                }.bind(this), waitMs);
+                }.bind(this), Math.min(parseFloat(retryMatch[1]) * 1000, 65000));
                 return;
               }
               reject(new Error('Gemini API Error: ' + parsed.error.message));
               return;
             }
-            const text = parsed.candidates && parsed.candidates[0] &&
-              parsed.candidates[0].content && parsed.candidates[0].content.parts &&
-              parsed.candidates[0].content.parts[0] ? parsed.candidates[0].content.parts[0].text : '';
+            const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
             resolve(text);
           } catch (e) { reject(new Error('Erreur parsing: ' + e.message)); }
         }.bind(this));
@@ -293,16 +287,65 @@ class AIAnalyzer {
     }.bind(this));
   }
 
-  _parseResponse(rawText) {
-    try {
-      const cleaned = rawText.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-      const parsed = JSON.parse(cleaned);
-      parsed.rawText = rawText;
-      return parsed;
-    } catch (e) {
-      return { errors: [{ line: null, severity: 'info', message: 'Réponse IA', fix: null, explanation: rawText }], summary: rawText, score: null, scoreDetails: null, advice: [], rawText: rawText };
-    }
+_parseResponse(rawText) {
+  try {
+    // Étape 1 : nettoyer les backticks markdown
+    let cleaned = rawText
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+
+    // Étape 2 : réparer les erreurs JSON typiques de l'IA
+    // Bug 1: explanation": sans guillemet ouvrant
+    cleaned = cleaned.replace(/([,{\s])explanation":/g, '$1"explanation":');
+    // Bug 2: virgules trailing avant } ou ]
+    cleaned = cleaned.replace(/,(\s*[}\]])/g, '$1');
+    // Bug 3: propriétés sans guillemets ouvrants (pattern général)
+    cleaned = cleaned.replace(/([,{\n\r]\s*)([a-zA-Z_]+)":/g, function(match, p1, p2) {
+      return p1 + '"' + p2 + '":';
+    });
+
+    const parsed = JSON.parse(cleaned);
+    parsed.rawText = rawText;
+    return parsed;
+
+  } catch (e) {
+    // JSON irrécupérable → extraire par regex
+    const scoreMatch  = rawText.match(/"score"\s*:\s*(\d+)/);
+    const summaryMatch = rawText.match(/"summary"\s*:\s*"([^"]{0,300})"/);
+    const score = scoreMatch ? parseInt(scoreMatch[1]) : null;
+
+    // Extraire les erreurs par regex aussi
+    const errors = [];
+    const errorBlocks = rawText.match(/"message"\s*:\s*"([^"]+)"/g) || [];
+    const fixBlocks   = rawText.match(/"fix"\s*:\s*"([^"]+)"/g) || [];
+    const lineBlocks  = rawText.match(/"line"\s*:\s*(\d+|null)/g) || [];
+
+    errorBlocks.forEach(function(block, i) {
+      const msg  = block.match(/"message"\s*:\s*"([^"]+)"/);
+      const fix  = fixBlocks[i] ? fixBlocks[i].match(/"fix"\s*:\s*"([^"]+)"/) : null;
+      const line = lineBlocks[i] ? lineBlocks[i].match(/(\d+)/) : null;
+      if (msg) {
+        errors.push({
+          line: line ? parseInt(line[1]) : null,
+          severity: 'warning',
+          message: msg[1],
+          fix: fix ? fix[1] : null,
+          explanation: null
+        });
+      }
+    });
+
+    return {
+      errors: errors,
+      summary: summaryMatch ? summaryMatch[1] : 'Analyse terminée.',
+      score: score,
+      scoreDetails: null,
+      advice: [],
+      rawText: rawText
+    };
   }
 }
-
+}
 module.exports = { AIAnalyzer };

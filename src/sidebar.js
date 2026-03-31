@@ -85,11 +85,15 @@ class SidebarProvider {
       });
     }
   }
+sendAnalyzingState(isAnalyzing) {
+  this.sendStatus(isAnalyzing ? 'analyzing' : 'idle');
+}
+
 sendStatus(status) {
   if (this._view) {
     this._view.webview.postMessage({
       type: 'statusUpdate',
-      status: status  // 'analyzing' | 'idle'
+      status: status
     });
   }
 }

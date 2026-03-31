@@ -1,48 +1,131 @@
 {
   "name": "ai-code-assistant",
   "displayName": "AI Code Assistant Pro",
-  "description": "Analyse, sécurité, génération de code, Git integration — propulsé par Gemini AI",
-  "version": "2.0.0",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Linters", "Other", "Machine Learning"],
+  "description": "Analyse IA complète — AST, OWASP, Gemini, auto-fix, Git integration",
+  "version": "3.0.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other",
+    "Machine Learning"
+  ],
   "activationEvents": [
-    "onLanguage:javascript", "onLanguage:typescript", "onLanguage:python",
-    "onLanguage:java", "onLanguage:cpp", "onLanguage:c",
-    "onLanguage:go", "onLanguage:rust", "onLanguage:php", "onLanguage:ruby"
+    "onLanguage:javascript",
+    "onLanguage:typescript",
+    "onLanguage:python",
+    "onLanguage:java",
+    "onLanguage:cpp",
+    "onLanguage:c",
+    "onLanguage:go",
+    "onLanguage:rust",
+    "onLanguage:php",
+    "onLanguage:ruby",
+    "onLanguage:html",
+    "onLanguage:css",
+    "onLanguage:sql",
+    "onLanguage:json",
+    "onLanguage:yaml",
+    "onLanguage:shellscript"
   ],
   "main": "./extension.js",
   "contributes": {
-    "commands": [
-      { "command": "aiAssistant.analyzeFile",    "title": "AI: Analyser le fichier" },
-      { "command": "aiAssistant.analyzeSecurity", "title": "AI: Analyse de sécurité" },
-      { "command": "aiAssistant.analyzePerformance", "title": "AI: ⚡ Analyse performance" },
-      { "command": "aiAssistant.analyzeProject",  "title": "AI: Analyser tout le projet" },
-      { "command": "aiAssistant.analyzeGit",      "title": "AI: Analyser diff Git" },
-      { "command": "aiAssistant.generateDoc",     "title": "AI: Générer la documentation" },
-      { "command": "aiAssistant.generateCode",    "title": "AI: Générer du code" },
-      { "command": "aiAssistant.explainCode",     "title": "AI: Expliquer la sélection" },
-      { "command": "aiAssistant.refactorCode",    "title": "AI: Refactorer la sélection" },
-      { "command": "aiAssistant.setApiKey",       "title": "AI: Configurer la clé API Gemini" }
-    ],
-   "keybindings": [
-  { "command": "aiAssistant.analyzeFile",     "key": "ctrl+alt+a", "when": "editorTextFocus" },
-  { "command": "aiAssistant.analyzeSecurity",  "key": "ctrl+alt+s", "when": "editorTextFocus" },
-  { "command": "aiAssistant.analyzePerformance", "key": "ctrl+alt+f", "when": "editorTextFocus" },
-  { "command": "aiAssistant.analyzeProject",   "key": "ctrl+alt+p", "when": "editorTextFocus" },
-  { "command": "aiAssistant.analyzeGit",       "key": "ctrl+alt+g", "when": "editorTextFocus" },
-  { "command": "aiAssistant.generateDoc",      "key": "ctrl+alt+d", "when": "editorTextFocus" },
-  { "command": "aiAssistant.generateCode",     "key": "ctrl+alt+n", "when": "editorTextFocus" },
-  { "command": "aiAssistant.explainCode",      "key": "ctrl+alt+e", "when": "editorHasSelection" },
-  { "command": "aiAssistant.refactorCode",     "key": "ctrl+alt+r", "when": "editorHasSelection" }
+"commands": [
+  { "command": "aiAssistant.analyzeFile",        "title": "AI: Analyser le fichier" },
+  { "command": "aiAssistant.analyzeFull",         "title": "AI: Analyse complète (AST + Sécurité + IA)" },
+  { "command": "aiAssistant.analyzeLocal",        "title": "AI: Analyse locale (AST + Sécurité, sans IA)" },
+  { "command": "aiAssistant.analyzeSecurity",     "title": "AI: Analyse de sécurité" },
+  { "command": "aiAssistant.analyzePerformance",  "title": "AI: Analyse performance" },
+  { "command": "aiAssistant.analyzeDeadCode",     "title": "AI: Détecter code mort" },
+  { "command": "aiAssistant.analyzeProject",      "title": "AI: Analyser tout le projet" },
+  { "command": "aiAssistant.analyzeGit",          "title": "AI: Analyser diff Git" },
+  { "command": "aiAssistant.generateDoc",         "title": "AI: Générer la documentation" },
+  { "command": "aiAssistant.generateCode",        "title": "AI: Générer du code" },
+  { "command": "aiAssistant.explainCode",         "title": "AI: Expliquer la sélection" },
+  { "command": "aiAssistant.refactorCode",        "title": "AI: Refactorer la sélection" },
+  { "command": "aiAssistant.setApiKey",           "title": "AI: Configurer la clé API Gemini" },
+  { "command": "aiAssistant.fixWithAI",           "title": "AI: Corriger avec IA" },
+  { "command": "aiAssistant.stopAnalysis",        "title": "AI: Arrêter l'analyse" }
 ],
+    "keybindings": [
+      {
+        "command": "aiAssistant.analyzeFile",
+        "key": "ctrl+alt+a",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.analyzeFull",
+        "key": "ctrl+alt+f",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.analyzeLocal",
+        "key": "ctrl+alt+l",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.analyzeSecurity",
+        "key": "ctrl+shift+s",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.analyzePerformance",
+        "key": "ctrl+shift+p",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.analyzeDeadCode",
+        "key": "ctrl+shift+k",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.analyzeProject",
+        "key": "ctrl+shift+j",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.analyzeGit",
+        "key": "ctrl+shift+g",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.generateDoc",
+        "key": "ctrl+shift+d",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.generateCode",
+        "key": "ctrl+shift+n",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "aiAssistant.explainCode",
+        "key": "ctrl+shift+e",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "aiAssistant.refactorCode",
+        "key": "ctrl+shift+r",
+        "when": "editorHasSelection"
+      }
+    ],
     "viewsContainers": {
       "activitybar": [
-        { "id": "aiAssistant", "title": "AI Assistant Pro", "icon": "$(robot)" }
+        {
+          "id": "aiAssistant",
+          "title": "AI Assistant Pro",
+          "icon": "$(robot)"
+        }
       ]
     },
     "views": {
       "aiAssistant": [
-        { "type": "webview", "id": "aiAssistant.sidebarView", "name": "AI Assistant Pro" }
+        {
+          "type": "webview",
+          "id": "aiAssistant.sidebarView",
+          "name": "AI Assistant Pro"
+        }
       ]
     },
     "configuration": {
@@ -51,26 +134,50 @@
         "aiAssistant.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Clé API Gemini (aistudio.google.com)"
+          "description": "Clé API Gemini"
+        },
+        "aiAssistant.snykToken": {
+          "type": "string",
+          "default": "",
+          "description": "Token Snyk (optionnel)"
         },
         "aiAssistant.autoAnalyze": {
           "type": "boolean",
-          "default": true,
-          "description": "Analyser automatiquement à chaque sauvegarde"
+          "default": false,
+          "description": "Analyser à chaque sauvegarde"
         },
         "aiAssistant.autoComplete": {
           "type": "boolean",
           "default": false,
-          "description": "Auto-complétion IA en temps réel (comme Copilot)"
+          "description": "Auto-complétion IA"
+        },
+        "aiAssistant.autoCommit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-commit fixes sur branche ai-fix/"
+        },
+        "aiAssistant.useAST": {
+          "type": "boolean",
+          "default": true,
+          "description": "Activer Tree-sitter AST"
         },
         "aiAssistant.language": {
           "type": "string",
           "default": "fr",
-          "enum": ["fr", "en"],
-          "description": "Langue des réponses"
+          "enum": [
+            "fr",
+            "en"
+          ]
         }
       }
     }
+  },
+  "dependencies": {
+    "tree-sitter": "^0.21.0",
+    "tree-sitter-java": "^0.21.0",
+    "tree-sitter-javascript": "^0.21.0",
+    "tree-sitter-typescript": "^0.21.0",
+    "tree-sitter-python": "^0.21.0"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0"
