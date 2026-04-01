@@ -17,15 +17,46 @@ function simpleHash(str) {
   return h.toString(36);
 }
 
-let lastAnalysisResult = null;
-let lastAnalysisFile = null;
 let currentAbortController = null;
 
 function activate(context) {
   console.log('[AI Assistant] Activated');
-
+// Restaurer depuis globalState (survit au rechargement)
+let lastAnalysisResult = context.globalState.get('lastResult', null);
+let lastAnalysisFile   = context.globalState.get('lastFile', null);
   const config = vscode.workspace.getConfiguration('aiAssistant');
-  const analyzer = new AIAnalyzer(config.get('apiKey') || '', config.get('language') || 'fr');
+  const analyzer = new AIAnalyzer(
+    config.get('apiKey') || '', 
+    config.get('language') || 'fr',
+    config.get('model') || 'gemini-1.5-flash'
+  );
+  
+  // -- Caching --
+  analyzer.setCacheData(context.globalState.get('ai_cache_data', []));
+  analyzer.onCacheUpdate = function(data) {
+    context.globalState.update('ai_cache_data', data);
+  };
+
+  // -- Quota Lock Persistance -- Survive les rechargements VS Code
+  const savedQuotaLock = context.globalState.get('ai_quota_lock', 0);
+  if (savedQuotaLock > Date.now()) {
+    analyzer.setQuotaLockTimestamp(savedQuotaLock);
+    console.log('[AI] Quota lock restored, ' + analyzer.getQuotaRemainingSeconds() + 's restants');
+  }
+  analyzer._onQuotaLocked = function(ts) {
+    context.globalState.update('ai_quota_lock', ts);
+  };
+
+  // Mettre à jour si les réglages changent
+  vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration('aiAssistant')) {
+      const newCfg = vscode.workspace.getConfiguration('aiAssistant');
+      analyzer.apiKey = newCfg.get('apiKey') || '';
+      analyzer.language = newCfg.get('language') || 'fr';
+      analyzer.model = newCfg.get('model') || 'gemini-1.5-flash';
+    }
+  });
+
   const diagnosticsManager = new DiagnosticsManager();
   const sidebarProvider = new SidebarProvider(context, analyzer, diagnosticsManager);
 
@@ -90,9 +121,11 @@ function activate(context) {
 
       const fileKey = editor.document.uri.toString() + '_' + simpleHash(editor.document.getText()) + '_' + editor.document.languageId;
       if (lastAnalysisFile === fileKey && lastAnalysisResult) {
+        sidebarProvider.clearChat(); // On vide pour que les stats soient en haut
         sidebarProvider.sendAnalysisResult(lastAnalysisResult, lastAnalysisResult._mode || 'analyze');
         updateStatusBar(lastAnalysisResult.score);
-        vscode.window.showInformationMessage('📋 Résultat depuis le cache.');
+        vscode.commands.executeCommand('aiAssistant.sidebarView.focus');
+        vscode.window.showInformationMessage('📋 Résultat affiché depuis le cache.');
         return;
       }
 
@@ -112,12 +145,14 @@ function activate(context) {
           result._mode = 'analyze';
           lastAnalysisResult = result;
           lastAnalysisFile = fileKey;
+          context.globalState.update('lastResult', result);
+          context.globalState.update('lastFile', fileKey);
           diagnosticsManager.updateDiagnostics(editor.document, result.errors);
           sidebarProvider.sendAnalysisResult(result, 'analyze', path.basename(editor.document.fileName), editor.document.languageId);
           sidebarProvider.sendAnalyzingState(false);
           updateStatusBar(result.score);
           const e = (result.errors || []).filter(x => x.severity === 'error').length;
-          const w = (result.errors || []).filter(x => x.severity === 'warning').length;
+          const w = (result.errors || []).filter(x => x.severity === 'warning' || x.severity === 'info').length;
           const s = result.score || 0;
           const medal = s >= 95 ? '🏆' : s >= 85 ? '✅' : s >= 70 ? '⚠️' : s >= 50 ? '🔶' : '❌';
           const msg = e === 0 && w === 0 ? medal + ' Code parfait ! Score: ' + s + '/100' : medal + ' ' + e + ' erreur(s), ' + w + ' warning(s) — Score: ' + s + '/100';
@@ -144,6 +179,15 @@ setTimeout(() => vscode.commands.executeCommand('aiAssistant.sidebarView.focus')
     })
   );
 
+  // ── COMMANDE : Réinitialiser le verrou quota
+  context.subscriptions.push(
+    vscode.commands.registerCommand('aiAssistant.resetQuotaLock', function() {
+      analyzer.setQuotaLockTimestamp(0);
+      context.globalState.update('ai_quota_lock', 0);
+      vscode.window.showInformationMessage('🔓 Verrou quota réinitialisé. Vous pouvez réessayer l\'IA.');
+    })
+  );
+
   // ══════════════════════════════════════════════════════
   //  COMMANDE : fixWithAI — le cœur du comportement Copilot
   //
@@ -157,6 +201,52 @@ setTimeout(() => vscode.commands.executeCommand('aiAssistant.sidebarView.focus')
       const editor = vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === document.uri.toString());
       if (!editor) return;
 
+      // Récupère le meilleur fix disponible (suggestedFix ou depuis le fixCache)
+      let bestFix = suggestedFix || '';
+      if (!bestFix) {
+        const allFixes = diagnosticsManager.getAllFixes();
+        for (const [, data] of allFixes) {
+          if (data.documentUri && data.documentUri.toString() === document.uri.toString() &&
+              data.originalRange && data.originalRange.start.line === lineIndex &&
+              data.fix && data.fix.trim().length > 0) {
+            bestFix = data.fix;
+            break;
+          }
+        }
+      }
+
+      const looksLikeCode = bestFix && (
+        bestFix.includes(';') || bestFix.includes('=') ||
+        bestFix.includes('(') || bestFix.includes('->') ||
+        bestFix.includes('.')
+      );
+
+      // ── Fix local SANS API — fonctionne toujours même avec quota dépassé
+      const applyLocalFix = async function() {
+        if (!looksLikeCode) return false;
+        const lineRange = document.lineAt(lineIndex).range;
+        const lineIndent = (document.lineAt(lineIndex).text.match(/^(\s*)/) || ['', ''])[1];
+        await editor.edit(b => b.replace(lineRange, lineIndent + bestFix.trim()));
+        vscode.window.setStatusBarMessage('✅ Fix local appliqué (sans IA)', 4000);
+        diagnosticsManager.removeDiagnosticsOnLines(document, [{ range: document.lineAt(lineIndex).range, text: '' }]);
+        return true;
+      };
+
+      // ── Si quota dépassé → fix local direct depuis le cache, ZERO API
+      if (analyzer.isQuotaLocked()) {
+        const remaining = analyzer.getQuotaRemainingSeconds();
+        const applied = await applyLocalFix();
+        if (!applied) {
+          vscode.window.showWarningMessage(
+            '⏳ Quota IA dépassé — ' + remaining + 's. Corrigez manuellement.', 'Réinitialiser'
+          ).then(a => {
+            if (a === 'Réinitialiser') vscode.commands.executeCommand('aiAssistant.resetQuotaLock');
+          });
+        }
+        return;
+      }
+
+      // ── Quota OK → essaie l'IA, fallback local si ça échoue
       const originalCode = methodRange ? document.getText(methodRange) : document.lineAt(lineIndex).text;
       const language = document.languageId;
 
@@ -166,57 +256,84 @@ setTimeout(() => vscode.commands.executeCommand('aiAssistant.sidebarView.focus')
       }, async function() {
         try {
           analyzer.apiKey = vscode.workspace.getConfiguration('aiAssistant').get('apiKey');
+          if (!methodRange) { await applyLocalFix(); return; }
 
-          // Prompt chirurgical — style Copilot, pas de description, du code direct
-         const prompt =
-  'RÈGLE 1: Retourne UNIQUEMENT le contenu de la méthode corrigée dans "refactored", SANS la signature, SANS les accolades ouvrante/fermante.\n' +
-  'RÈGLE 2: Si tu ne peux pas corriger sans casser le code, retourne le code ORIGINAL inchangé.\n' +
-  'RÈGLE 3: NE PAS ajouter de code avant ou après la méthode.\n\n' +
-  'PROBLÈME: ' + errorMessage + '\n' +
-  'CODE:\n```' + language + '\n' + originalCode + '\n```';
-// Vérifie que le fix ne contient pas de code parasite
-const originalLines = originalCode.split('\n').length;
-const fixedLines = fixedCode.split('\n').length;
-if (fixedLines > originalLines * 2) {
-  vscode.window.showWarningMessage('⚠️ Fix rejeté — trop de lignes ajoutées.');
-  return;
-}
+          const originalLineCount = originalCode.split('\n').length;
+          const prompt =
+            'Tu es un expert DEVELOPPEUR ' + language + '.\n' +
+            'RÈGLE ABSOLUE: Retourne uniquement la méthode corrigée dans "refactored".\n' +
+            'RÈGLE ABSOLUE: Même indentation, même structure, AUCUNE classe entière.\n' +
+            'RÈGLE ABSOLUE: Si renommage de variable, renomme PARTOUT dans la méthode.\n\n' +
+            'PROBLÈME: ' + errorMessage + '\n' +
+            'SUGGESTION: ' + (suggestedFix || '') + '\n\n' +
+            'MÉTHODE:\n```' + language + '\n' + originalCode + '\n```\n\n' +
+            'Réponds en JSON avec "refactored" contenant la méthode corrigée.';
+
           const result = await analyzer.generateCode(prompt, language, '');
-
-          if (!result.refactored || result.refactored.trim().length < 10) {
-            vscode.window.showWarningMessage('⚠️ AI Fix: pas de correction générée.');
+          if (!result.refactored || result.refactored.trim().length < 5) {
+            await applyLocalFix();
             return;
           }
 
-          let fixedCode = result.refactored.trim();
+          let fixedCode = result.refactored.trim()
+            .replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim();
 
-          // Nettoie les backticks markdown si l'IA les a ajoutés
-          fixedCode = fixedCode.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim();
-
-          // Applique directement — comme Copilot, sans confirmation popup
-          if (methodRange) {
-            await editor.edit(function(b) { b.replace(methodRange, fixedCode); });
-          } else {
-            await editor.edit(function(b) {
-              b.replace(document.lineAt(lineIndex).range, (indent || '') + fixedCode);
-            });
+          const instructionKeywords = ['Renommer', 'Modifier', 'Supprimer', 'Ajouter', 'Utiliser', 'Rename', 'Change'];
+          if (instructionKeywords.some(kw => fixedCode.startsWith(kw) && fixedCode.split('\n').length < 3)) {
+            await applyLocalFix(); return;
+          }
+          if (fixedCode.split('\n').length > originalLineCount * 2 ||
+              fixedCode.includes('public class ') || fixedCode.includes('package ')) {
+            await applyLocalFix(); return;
           }
 
-          // Message discret en status bar (3s) — pas de popup bloquante
-          vscode.window.setStatusBarMessage('✅ AI Fix appliqué — ' + (result.summary || 'correction effectuée'), 4000);
+          await editor.edit(b => b.replace(methodRange, fixedCode));
+          vscode.window.setStatusBarMessage('✅ AI Fix appliqué', 4000);
 
-          // Re-analyse en arrière-plan pour mettre à jour les diagnostics
-          setTimeout(async function() {
+          // Re-analyse locale après fix IA
+          setTimeout(() => {
             try {
-              const updatedText = editor.document.getText();
-              const reAnalysis = await analyzer.analyzeFile(updatedText, language);
-              diagnosticsManager.updateDiagnostics(editor.document, reAnalysis.errors);
-              updateStatusBar(reAnalysis.score);
-            } catch (_) { /* silencieux */ }
-          }, 1500);
+              const wf = vscode.workspace.workspaceFolders;
+              const pipeline = new AnalysisPipeline(analyzer, wf ? wf[0].uri.fsPath : null, { useAI: false });
+              const localResult = pipeline.runLocal(editor.document.getText(), language);
+              
+              // 1. On garde les anciennes erreurs Gemini qui sont HORS de la méthode qu'on vient de corriger
+              const startL = methodRange.start.line + 1;
+              const endL = methodRange.end.line + 1;
+              const oldAIErrors = (lastAnalysisResult?.errors || []).filter(e => 
+                e.source === 'gemini' && (e.line < startL || e.line > endL)
+              );
+              
+              // 2. Fusion = erreurs structurelles locales + erreurs IA restantes
+              const fusedErrors = [...localResult.errors, ...oldAIErrors];
+              diagnosticsManager.updateDiagnostics(editor.document, fusedErrors);
+
+              // 3. Calcul précis du score réel
+              const remainingErrors = fusedErrors.filter(x => x.severity === 'error').length;
+              const remainingWarnings = fusedErrors.filter(x => x.severity === 'warning' || x.severity === 'info').length;
+              
+              // Base 100, on retire les pénalités réelles
+              let newScore = 100 - (remainingErrors * 10) - (remainingWarnings * 3);
+              newScore = Math.max(0, Math.min(100, newScore));
+              
+              updateStatusBar(newScore);
+
+              // Invalider cache mémoire + cache Gemini pour l'ancienne version du code
+              // Ainsi si l'utilisateur Ctrl+Z pour revenir, Gemini re-analysera le fichier
+              lastAnalysisResult = { ...localResult, errors: fusedErrors, score: newScore, _mode: 'local',
+                summary: '🔄 Fix appliqué. Sauvegardez (Ctrl+S) pour confirmer avec une passe IA globale.' };
+              lastAnalysisFile = null; // Force la prochaine sauvegarde à rappeler Gemini
+              context.globalState.update('lastFile', null);
+              analyzer.clearCacheForCode(editor.document.getText(), language);
+
+              sidebarProvider.sendAnalysisResult(lastAnalysisResult, 'local');
+            } catch (_) {}
+          }, 1000);
 
         } catch (err) {
-          vscode.window.showErrorMessage('AI Fix: ' + err.message);
+          // ── Fallback : si l'API échoue (quota ou autre), applique le fix local
+          const applied = await applyLocalFix();
+          if (!applied) vscode.window.showErrorMessage('AI Fix: ' + err.message);
         }
       });
     })
@@ -526,16 +643,16 @@ setTimeout(() => vscode.commands.executeCommand('aiAssistant.sidebarView.focus')
           updateStatusBar(result.score);
 
           const e = (result.errors || []).filter(x => x.severity === 'error').length;
-          const w = (result.errors || []).filter(x => x.severity === 'warning').length;
+          const w = (result.errors || []).filter(x => x.severity === 'warning' || x.severity === 'info').length;
           const s = result.score || 0;
           const medal = s >= 95 ? '🏆' : s >= 85 ? '✅' : s >= 70 ? '⚠️' : s >= 50 ? '🔶' : '❌';
 
           // Afficher le timing
           const timing = result.timing || {};
           const timingInfo = [
-            timing.ast ? 'AST:' + timing.ast + 'ms' : null,
-            timing.security ? 'Sécu:' + timing.security + 'ms' : null,
-            timing.ai ? 'IA:' + timing.ai + 'ms' : null
+            timing.ast !== undefined ? 'AST:' + timing.ast + 'ms' : null,
+            timing.security !== undefined ? 'Sécu:' + timing.security + 'ms' : null,
+            timing.ai !== undefined ? 'IA:' + timing.ai + 'ms' : null
           ].filter(Boolean).join(' · ');
 
           const msg = medal + ' Score: ' + s + '/100 — ' + e + ' erreur(s), ' +
@@ -589,7 +706,7 @@ setTimeout(() => vscode.commands.executeCommand('aiAssistant.sidebarView.focus')
       updateStatusBar(result.score);
 
       const e = result.errors.filter(x => x.severity === 'error').length;
-      const w = result.errors.filter(x => x.severity === 'warning').length;
+      const w = result.errors.filter(x => x.severity === 'warning' || x.severity === 'info').length;
 
       if (e === 0 && w === 0) {
         vscode.window.showInformationMessage('✅ Analyse locale OK — aucun problème.');
@@ -618,7 +735,8 @@ setTimeout(() => vscode.commands.executeCommand('aiAssistant.sidebarView.focus')
       // Debounce — attend 1.5s après la dernière sauvegarde
       if (autoTimer) clearTimeout(autoTimer);
       autoTimer = setTimeout(async function() {
-        const fileKey = doc.uri.toString() + '_' + simpleHash(doc.getText());
+        // fileKey DOIT inclure languageId pour matcher le format utilisé partout
+        const fileKey = doc.uri.toString() + '_' + simpleHash(doc.getText()) + '_' + doc.languageId;
         if (lastAnalysisFile === fileKey && lastAnalysisResult) return; // cache hit
 
         sidebarProvider.sendAnalyzingState(true);
@@ -628,12 +746,14 @@ setTimeout(() => vscode.commands.executeCommand('aiAssistant.sidebarView.focus')
           result._mode = 'analyze';
           lastAnalysisResult = result;
           lastAnalysisFile = fileKey;
+          context.globalState.update('lastResult', result);
+          context.globalState.update('lastFile', fileKey);
           diagnosticsManager.updateDiagnostics(doc, result.errors);
           sidebarProvider.sendAnalysisResult(result, 'analyze', path.basename(doc.fileName), doc.languageId);
           sidebarProvider.sendAnalyzingState(false);
           updateStatusBar(result.score);
           const e = (result.errors || []).filter(x => x.severity === 'error').length;
-          const w = (result.errors || []).filter(x => x.severity === 'warning').length;
+          const w = (result.errors || []).filter(x => x.severity === 'warning' || x.severity === 'info').length;
           const s = result.score || 0;
           const medal = s >= 95 ? '🏆' : s >= 85 ? '✅' : s >= 70 ? '⚠️' : s >= 50 ? '🔶' : '❌';
           if (e === 0 && w === 0) vscode.window.showInformationMessage(medal + ' Score: ' + s + '/100');
@@ -646,6 +766,15 @@ setTimeout(() => vscode.commands.executeCommand('aiAssistant.sidebarView.focus')
           console.error('[AI Auto-analyse]', err.message);
         }
       }, 1500);
+    })
+  );
+
+  // ── Retire les avertissements des lignes modifiées manuellement (Bug 1)
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument(function(e) {
+      if (e.contentChanges && e.contentChanges.length > 0) {
+        diagnosticsManager.removeDiagnosticsOnLines(e.document, e.contentChanges);
+      }
     })
   );
 

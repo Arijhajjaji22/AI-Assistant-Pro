@@ -7,6 +7,8 @@ const https = require('https');
 // ══════════════════════════════════════════════
 const _cache = new Map();
 
+let _quotaLockedUntil = 0;
+
 function _hash(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) {
@@ -16,10 +18,63 @@ function _hash(str) {
 }
 
 class AIAnalyzer {
-  constructor(apiKey, language = 'fr') {
+  constructor(apiKey, language = 'fr', model = 'gemini-2.5-flash-lite') {
     this.apiKey = apiKey;
     this.language = language;
+    this.setModel(model);
     this.conversationHistory = [];
+    this.onCacheUpdate = null;
+  }
+
+  setModel(m) {
+    this.model = this._normalizeModel(m);
+  }
+
+  _normalizeModel(m) {
+    if (!m) return 'gemini-2.5-flash-lite';
+    const low = m.toLowerCase();
+    if (low.includes('flash')) return 'gemini-2.5-flash-lite';
+    if (low.includes('pro'))   return 'gemini-1.5-pro';
+    return low;
+  }
+
+  setCacheData(data) {
+    if (data && Array.isArray(data)) {
+      data.forEach(function(item) { _cache.set(item[0], item[1]); });
+      console.log('[CACHE] Restored ' + _cache.size + ' items');
+    }
+  }
+
+  getCacheData() {
+    return Array.from(_cache.entries());
+  }
+
+  // Persists quota lock timestamp so it survives extension reloads
+  setQuotaLockTimestamp(ts) {
+    _quotaLockedUntil = ts || 0;
+  }
+
+  getQuotaLockTimestamp() {
+    return _quotaLockedUntil;
+  }
+
+  isQuotaLocked() {
+    return Date.now() < _quotaLockedUntil;
+  }
+
+  getQuotaRemainingSeconds() {
+    return Math.max(0, Math.ceil((_quotaLockedUntil - Date.now()) / 1000));
+  }
+
+  // Efface le cache Gemini pour un code spécifique
+  // Utile après un fix pour forcer une ré-analyse sur le code SUIVANT (ou sur un revert)
+  clearCacheForCode(code, language) {
+    const key = 'analyze|' + language + '|' + _hash(code);
+    if (_cache.has(key)) {
+      _cache.delete(key);
+      if (this.onCacheUpdate) this.onCacheUpdate(this.getCacheData());
+      console.log('[CACHE] Invalidated for current code version');
+    }
   }
 
   async analyzeFile(code, language) {
@@ -28,6 +83,7 @@ class AIAnalyzer {
     const prompt = 'Analyse ce code ' + language + ':\n\n```' + language + '\n' + code + '\n```';
     const result = await this._callAPI(prompt);
     _cache.set(key, result);
+    if (this.onCacheUpdate) this.onCacheUpdate(this.getCacheData());
     return result;
   }
 
@@ -37,6 +93,7 @@ class AIAnalyzer {
     const prompt = 'Analyse UNIQUEMENT les vulnérabilités de sécurité de ce code ' + language + ':\n\n```' + language + '\n' + code + '\n```';
     const result = await this._callAPIWithSystemPrompt(prompt, 'security');
     _cache.set(key, result);
+    if (this.onCacheUpdate) this.onCacheUpdate(this.getCacheData());
     return result;
   }
 
@@ -46,6 +103,7 @@ class AIAnalyzer {
     const prompt = 'Analyse UNIQUEMENT la performance et l\'optimisation de ce code ' + language + ':\n\n```' + language + '\n' + code + '\n```\n\nDétecte: boucles O(n²), requêtes en boucles (N+1), fuites mémoire, récursion sans limite, string concatenation en boucle, événements non supprimés, race conditions.';
     const result = await this._callAPIWithSystemPrompt(prompt, 'performance');
     _cache.set(key, result);
+    if (this.onCacheUpdate) this.onCacheUpdate(this.getCacheData());
     return result;
   }
 
@@ -55,6 +113,7 @@ class AIAnalyzer {
     const prompt = 'Analyse ce code ' + language + ' et identifie UNIQUEMENT le code mort et inutilisé:\n\n```' + language + '\n' + code + '\n```';
     const result = await this._callAPIWithSystemPrompt(prompt, 'deadcode');
     _cache.set(key, result);
+    if (this.onCacheUpdate) this.onCacheUpdate(this.getCacheData());
     return result;
   }
 
@@ -168,8 +227,8 @@ _getDefaultSystemPrompt() {
     '  -10 pts : Données sensibles non chiffrées\n' +
     '  -8 pts  : Entrées non validées\n\n' +
     '【3. CLEAN CODE】 max -20 pts\n' +
-    '  -3 pts  : Noms non descriptifs (max -9)\n' +
-    '  -5 pts  : Fonction > 30 lignes\n' +
+    '  -3 pts  : Noms non descriptifs (max -9) -> severity DOIT ETRE "warning"\n' +
+    '  -5 pts  : Fonction > 30 lignes -> severity DOIT ETRE "warning"\n' +
     '  -5 pts  : Code dupliqué\n' +
     '  -3 pts  : Magic numbers\n' +
     '  -3 pts  : Commentaires manquants\n\n' +
@@ -190,7 +249,7 @@ _getDefaultSystemPrompt() {
     '- DÉDUPLICATION STRICTE: Maximum 1 diagnostic par numéro de ligne. Regroupe TOUS les problèmes d\'une même ligne en UN SEUL objet dans "errors". Un message concis qui résume tous les problèmes de cette ligne.\n\n' +
     'Réponds UNIQUEMENT en JSON valide:\n' +
     '{\n' +
-    '  "errors": [{"line":<n ou null>,"severity":"error|warning|info","message":"<problème concis — 1 seul par ligne>","fix":"<UNE SEULE LIGNE de code Java/JS exact prêt à copier-coller, JAMAIS une description textuelle. Exemple: .orElseThrow(() -> new NoSuchElementException(\\"Entry not found: \\" + entryId))>","explanation":"<pourquoi en 1 phrase>"}],\n' +
+    '  "errors": [{"line":<n ou null>,"severity":"error|warning|info","message":"<problème concis — 1 seul par ligne>","fix":"<CODE JAVA/JS EQUIVALENT. EX: String x = \"val\"; INTERDICTION DE RETOURNER DES PHRASES COMME \"Renommer...\". SI PAS DE CODE DISPONIBLE, LAISSER VIDE \"\">","explanation":"<pourquoi en 1 phrase>"}],\n' +
     '  "summary": "<résumé 2-3 phrases>",\n' +
     '  "score": <0-100>,\n' +
     '  "scoreDetails": {"breakdown": [\n' +
@@ -206,7 +265,7 @@ _getDefaultSystemPrompt() {
 }
 
   _getSecurityPrompt() {
-    return 'Tu es un expert cybersécurité (OWASP). Analyse UNIQUEMENT les vulnérabilités.\nRéponds en JSON:\n{"errors":[{"line":<n>,"severity":"error|warning|info","message":"<vuln>","fix":"<code exact de correction, une seule ligne>","explanation":"<explication>"}],"summary":"<résumé>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
+    return 'Tu es un expert cybersécurité (OWASP). Analyse UNIQUEMENT les vulnérabilités.\nRéponds en JSON:\n{"errors":[{"line":<n>,"severity":"error|warning|info","message":"<vuln>","fix":"<CODE EXACT ET EXÉCUTABLE DE REMPLACEMENT (1 seule ligne). AUCUNE description.>","explanation":"<explication>"}],"summary":"<résumé>","score":<0-100>,"scoreDetails":{"breakdown":[]},"advice":["<conseil>"],"refactored":null}';
   }
 
   _getDeadCodePrompt() {
@@ -234,7 +293,7 @@ _getDefaultSystemPrompt() {
     '- DÉDUPLICATION STRICTE: Maximum 1 diagnostic par numéro de ligne. Regroupe TOUS les problèmes d\'une même ligne en UN SEUL objet dans "errors".\n' +
     '- Le champ "fix" doit contenir du CODE EXACT prêt à copier-coller, JAMAIS une description textuelle.\n\n' +
     'Réponds UNIQUEMENT en JSON valide:\n' +
-    '{"errors":[{"line":<n ou null>,"severity":"error|warning|info","message":"<problème concis — 1 seul par ligne>","fix":"<code exact optimisé, une seule ligne>","explanation":"<impact perf en 1 phrase>"}],' +
+    '{"errors":[{"line":<n ou null>,"severity":"error|warning|info","message":"<problème concis — 1 seul par ligne>","fix":"<CODE EXACT ET EXÉCUTABLE DE REMPLACEMENT (1 seule ligne). AUCUNE description.>","explanation":"<impact perf en 1 phrase>"}],' +
     '"summary":"<résumé 2-3 phrases>",' +
     '"score":<0-100>,' +
     '"scoreDetails":{"breakdown":[' +
@@ -248,43 +307,63 @@ _getDefaultSystemPrompt() {
 }
   _httpRequest(body, retryCount) {
     retryCount = retryCount || 0;
-    return new Promise(function(resolve, reject) {
+    return new Promise((resolve, reject) => {
+      // 🚨 FAIL FAST : Si on sait qu'on est en quota, on rejette AVANT l'envoi
+      const now = Date.now();
+      if (now < _quotaLockedUntil) {
+        const remaining = Math.ceil((_quotaLockedUntil - now) / 1000);
+        reject(new Error(`Quota gratuit API dépassé (max 15 req/min). Veuillez patienter encore ${remaining}s.`));
+        return;
+      }
+
+      if (!body.generationConfig) body.generationConfig = { temperature: 0.0 };
       const bodyString = JSON.stringify(body);
-      const model = 'gemini-2.5-flash-lite';
+      const modelName = this.model || 'gemini-2.5-flash-lite';
       const options = {
         hostname: 'generativelanguage.googleapis.com',
-        path: '/v1beta/models/' + model + ':generateContent?key=' + this.apiKey,
+        path: '/v1beta/models/' + modelName + ':generateContent?key=' + this.apiKey,
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyString) }
       };
-      const req = https.request(options, function(res) {
+      const req = https.request(options, (res) => {
         let data = '';
-        res.on('data', function(chunk) { data += chunk; });
-        res.on('end', function() {
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
           try {
             const parsed = JSON.parse(data);
             if (parsed.error) {
               const msg = parsed.error.message || '';
-              const retryMatch = msg.match(/retry in ([\d.]+)s/i);
-              if (retryMatch && retryCount < 2) {
-                setTimeout(function() {
-                  this._httpRequest(body, retryCount + 1).then(resolve).catch(reject);
-                }.bind(this), Math.min(parseFloat(retryMatch[1]) * 1000, 65000));
+              const isQuota = msg.includes('Quota exceeded') || msg.includes('rate-limits') || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED');
+              if (isQuota) {
+                const lockUntil = Date.now() + 61000; // Bloque 61s
+                _quotaLockedUntil = lockUntil;
+                // Notifie extension.js pour persister dans globalState
+                if (this._onQuotaLocked) this._onQuotaLocked(lockUntil);
+                reject(new Error('Quota gratuit API dépassé (max 15 req/min). Veuillez patienter 1 minute ou utiliser une clé AI Studio payante.'));
                 return;
               }
-              reject(new Error('Gemini API Error: ' + parsed.error.message));
+
+              const retryMatch = msg.match(/retry in ([\d.]+)s/i);
+              if (retryMatch && retryCount < 2) {
+                setTimeout(() => {
+                  this._httpRequest(body, retryCount + 1).then(resolve).catch(reject);
+                }, Math.min(parseFloat(retryMatch[1]) * 1000, 65000));
+                return;
+              }
+              
+              reject(new Error('Gemini API Error: ' + msg));
               return;
             }
             const text = parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
             resolve(text);
           } catch (e) { reject(new Error('Erreur parsing: ' + e.message)); }
-        }.bind(this));
-      }.bind(this));
-      req.on('error', function(e) { reject(new Error('Erreur réseau: ' + e.message)); });
-      req.setTimeout(90000, function() { req.destroy(); reject(new Error('Timeout 90s')); });
+        });
+      });
+      req.on('error', (e) => { reject(new Error('Erreur réseau: ' + e.message)); });
+      req.setTimeout(90000, () => { req.destroy(); reject(new Error('Timeout 90s')); });
       req.write(bodyString);
       req.end();
-    }.bind(this));
+    });
   }
 
 _parseResponse(rawText) {

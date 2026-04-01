@@ -179,16 +179,29 @@ class ASTAnalyzer {
     const blocks = new Map();
 
     for (let i = 0; i <= lines.length - blockSize; i++) {
-      const block = lines.slice(i, i + blockSize)
-        .map(l => l.trim())
-        .filter(l => l.length > 0 && !l.startsWith('//') && !l.startsWith('*'))
-        .join('\n');
+    const block = lines.slice(i, i + blockSize)
+  .map(l => l.trim())
+  .filter(function(l) {
+  if (!l || l.length === 0) return false;
+  if (l.startsWith('//') || l.startsWith('*') || l.startsWith('/*')) return false;
+  if (/^(import|from|package)\b/.test(l)) return false;
+  if (l.startsWith('@')) return false;
+  // Ignorer les déclarations de champs de classe
+  if (/^(private|protected|public)\s+.*?;\s*$/.test(l)) return false;
+  // Ignorer les accolades seules
+  if (l === '{' || l === '}' || l === '};') return false;
+  return true;
+})
+  .join('\n');
+
+// Ignorer les blocs trop courts ou qui ne contiennent que des déclarations
+if (block.length < 80 || block.split('\n').length < 3) continue;
 
       if (block.length < 50) continue; // trop court
 
       if (blocks.has(block)) {
         const firstLine = blocks.get(block);
-        if (firstLine !== i) { // évite les doublons d'alerte
+        if (i >= firstLine + blockSize) { // Ne pas signaler de doublon si les blocs se chevauchent
           errors.push({
             line: i + 1,
             severity: 'warning',

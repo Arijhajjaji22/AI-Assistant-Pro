@@ -46,7 +46,8 @@
   { "command": "aiAssistant.refactorCode",        "title": "AI: Refactorer la sélection" },
   { "command": "aiAssistant.setApiKey",           "title": "AI: Configurer la clé API Gemini" },
   { "command": "aiAssistant.fixWithAI",           "title": "AI: Corriger avec IA" },
-  { "command": "aiAssistant.stopAnalysis",        "title": "AI: Arrêter l'analyse" }
+  { "command": "aiAssistant.stopAnalysis",        "title": "AI: Arrêter l'analyse" },
+  { "command": "aiAssistant.resetQuotaLock",      "title": "AI: 🔓 Réinitialiser verrou quota API" }
 ],
     "keybindings": [
       {
@@ -168,6 +169,16 @@
             "fr",
             "en"
           ]
+        },
+        "aiAssistant.model": {
+          "type": "string",
+          "default": "gemini-1.5-flash",
+          "enum": [
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-1.0-pro"
+          ],
+          "description": "Modèle d'IA à utiliser"
         }
       }
     }

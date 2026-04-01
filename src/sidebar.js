@@ -85,11 +85,17 @@ class SidebarProvider {
       });
     }
   }
-sendAnalyzingState(isAnalyzing) {
-  this.sendStatus(isAnalyzing ? 'analyzing' : 'idle');
-}
+  sendAnalyzingState(isAnalyzing) {
+    this.sendStatus(isAnalyzing ? 'analyzing' : 'idle');
+  }
 
-sendStatus(status) {
+  clearChat() {
+    if (this._view) {
+      this._view.webview.postMessage({ type: 'chatCleared' });
+    }
+  }
+
+  sendStatus(status) {
   if (this._view) {
     this._view.webview.postMessage({
       type: 'statusUpdate',
